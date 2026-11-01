@@ -1,45 +1,54 @@
-# Segmentation lát CT phổi trên Raspberry Pi 4 + OV5642
+# Lung CT Slice Segmentation on Raspberry Pi 4 + OV5642
 
-Đây là chương trình nghiên cứu chạy CNN segmentation 2D bằng CPU. Đầu vào là
-từng lát CT DICOM hoặc ảnh JPEG/PNG chụp lại một lát CT. Đầu ra là mask nhị phân,
-ảnh tô đỏ vùng mô hình dự đoán, bản đồ điểm số và JSON cho từng ảnh.
+This is a research program that runs a 2D CNN segmentation model on the CPU. The
+input is individual DICOM CT slices, or JPEG/PNG photos of a CT slice. The output
+is a binary mask, an image with the model's predicted region highlighted in red,
+a score map, and a JSON file for each image.
 
-**Chưa kèm mô hình đã huấn luyện.** Không thể xác định khả năng nhận diện tổn
-thương khi chỉ biết tên “CNN segmen”. Bạn cần file trọng số, đúng mã kiến trúc,
-ý nghĩa lớp foreground và quy trình tiền xử lý lúc huấn luyện.
-Mô hình phân vùng toàn bộ phổi không tự trở thành mô hình phân vùng nốt/u phổi.
-Mask đỏ chỉ là vùng mô hình dự đoán, không phải xác nhận ung thư. Mask trống
-không loại trừ bệnh; điểm số pixel không phải xác suất mắc ung thư.
+**No trained model is included.** Lesion-detection ability cannot be determined
+from the name "CNN segmen" alone. You need the weights file, the exact
+architecture code, the meaning of the foreground class, and the preprocessing
+pipeline used during training.
+A model that segments the whole lung does not automatically become a model that
+segments lung nodules/tumors. The red mask is only the region the model
+predicted, not a confirmation of cancer. An empty mask does not rule out
+disease; pixel scores are not cancer probabilities.
 
-## 1. OV5642 và ảnh CT
+## 1. OV5642 and CT images
 
-OV5642 chụp ánh sáng nhìn thấy từ phim trên hộp đèn hoặc màn hình hiển thị CT;
-camera không tự chụp CT bên trong người. Nên dùng DICOM gốc nếu có.
-Ảnh chụp lại không có HU hoặc tỉ lệ mm/pixel đáng tin cậy từ CT gốc.
+The OV5642 captures visible light from film on a lightbox or from a screen
+displaying the CT; the camera does not perform a CT scan of the body. Use the
+original DICOM whenever available.
+Photographed images do not carry reliable HU values or mm/pixel scale from the
+original CT.
 
-Tên cảm biến OV5642 chưa xác định được board/driver. Bản này kết nối camera
-qua **lệnh chụp một ảnh JPEG của driver đang hoạt động**, không giả định
-`cv2.VideoCapture(0)` đọc được SPI. Không kèm driver SPI hay bảng thanh ghi
-OV5642 chưa được kiểm tra trên module của bạn.
+The sensor name OV5642 alone does not identify the board/driver. This version
+connects to the camera through **a command that captures one JPEG using the
+active driver**; it does not assume `cv2.VideoCapture(0)` can read over SPI. No
+SPI driver or OV5642 register table is included, as none has been verified on
+your module.
 
-Nếu là ArduCAM Mini OV5642 có FIFO, cần SPI để truyền ảnh và thường I2C để
-cấu hình cảm biến. Đối chiếu sơ đồ của đúng board và driver trước khi đấu dây,
-đặc biệt điện áp và chân CS. Không coi OV5642 dạng DVP trần là camera SPI.
-Driver ArduCAM cũ bên dưới có cấu hình BCM2835/2836; không giả định chạy nguyên
-trạng trên Pi 4 hoặc Raspberry Pi OS hiện tại.
+If you are using an ArduCAM Mini OV5642 with FIFO, SPI is needed to transfer
+images and I2C is usually needed to configure the sensor. Check the schematic of
+your exact board and driver before wiring, especially voltage and the CS pin. Do
+not treat a bare DVP OV5642 as an SPI camera.
+The legacy ArduCAM driver referenced below has BCM2835/2836 configurations; do
+not assume it runs unmodified on a Pi 4 or current Raspberry Pi OS.
 
-Ảnh camera phải chứa **một lát cắt**, đã cân thẳng, đủ nét, không lóa, đúng chiều
-và không có giao diện/chữ bên trong vùng đưa vào mạng. Nếu chụp cả tấm phim có
-nhiều ô, chọn ROI từng ô hoặc cắt riêng trước. `--roi X Y W H` chọn một hình chữ
-nhật cố định, không tự sửa phối cảnh hoặc tự tìm các ô phim.
-Mô hình huấn luyện trên DICOM chưa được coi là phù hợp với ảnh chụp lại;
-cần huấn luyện/đánh giá trên dữ liệu cùng cách thu nhận.
+The camera image must contain **a single slice**, be straight, in focus, free of
+glare, correctly oriented, and have no UI/text inside the region fed to the
+network. If you photograph an entire film sheet with multiple panels, select an
+ROI for each panel or crop them separately first. `--roi X Y W H` selects a fixed
+rectangle; it does not correct perspective or find film panels automatically.
+A model trained on DICOM should not be assumed suitable for photographed images;
+it must be trained/evaluated on data acquired the same way.
 
-## 2. Cài trên Pi 4
+## 2. Installation on Pi 4
 
-Ưu tiên Raspberry Pi OS **64-bit**, Python 3.11–3.13 cho nhánh TorchScript
-(API TorchScript đã deprecated; không chọn Python 3.14 cho triển khai nhánh này).
-Tạo môi trường:
+Prefer Raspberry Pi OS **64-bit**, with Python 3.11–3.13 for the TorchScript path
+(the TorchScript API is deprecated; do not choose Python 3.14 for deploying this
+path).
+Create the environment:
 
 ```bash
 cd pi4_ct_seg
@@ -49,27 +58,28 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Chọn một runtime:
+Choose one runtime:
 
 ```bash
-# Để chạy TorchScript .pt:
+# To run a TorchScript .pt:
 python -m pip install torch
 
-# Hoặc, nếu đã xuất mô hình ONNX:
+# Or, if you have exported an ONNX model:
 python -m pip install onnxruntime
 ```
 
-Wheel phải tương thích phiên bản Python và Linux ARM64 của máy. Nếu pip báo
-không có wheel, cần dùng cặp Python/runtime được nhà cung cấp hỗ trợ; không
-cài wheel x86 lên Pi. Không có cam kết tốc độ FPS: đo trực tiếp với mô hình
-của bạn. Bắt đầu kích thước 256x256 chỉ khi phù hợp lúc huấn luyện, dùng
-`threads=2`, xử lý từng lát để giới hạn RAM. Thu nhỏ ảnh có thể mất nốt nhỏ.
+The wheel must match your Python version and Linux ARM64. If pip reports no
+wheel available, use a Python/runtime combination supported by the vendor; do
+not install x86 wheels on the Pi. No FPS speed is promised: measure it directly
+with your model. Start at 256x256 only if that matches training, use
+`threads=2`, and process one slice at a time to limit RAM. Downscaling images
+may lose small nodules.
 
-## 3. File .pt của CNN
+## 3. The CNN .pt file
 
-Ứng dụng đọc **TorchScript**, không đọc trực tiếp một `state_dict` bất kỳ.
-Nếu file hiện tại là checkpoint PyTorch, thực hiện xuất trên máy đã huấn luyện
-có cùng phiên bản code/thư viện:
+The application loads **TorchScript**, not an arbitrary `state_dict` directly.
+If your current file is a PyTorch checkpoint, export it on the training machine
+using the same code/library versions:
 
 ```bash
 python export_pt.py --checkpoint best.pt \
@@ -78,148 +88,164 @@ python export_pt.py --checkpoint best.pt \
   --config config.example.json --out model_scripted.pt
 ```
 
-`my_network:UNet` và các tham số trên chỉ là **ví dụ tên kiến trúc**. Thay bằng
-module/lớp/tham số thật, đặt module đó trong thư mục hiện tại hoặc Python path.
-Script hỗ trợ state_dict trực tiếp hoặc dict có khóa `state_dict`/
-`model_state_dict`, nạp strict và xuất bằng `torch.jit.script`.
-Checkpoint dùng định dạng khác, prefix `module.`, hoặc model không script được
-cần điều chỉnh theo mã huấn luyện. Không tự đoán kiến trúc từ file .pt.
+`my_network:UNet` and the parameters above are only **example architecture
+names**. Replace them with your real module/class/parameters, and place that
+module in the current directory or on the Python path.
+The script supports a plain state_dict or a dict with a `state_dict`/
+`model_state_dict` key, loads strictly, and exports with `torch.jit.script`.
+Checkpoints in other formats, with a `module.` prefix, or models that cannot be
+scripted need adjustments based on the training code. The architecture is never
+guessed from the .pt file.
 
-Hợp đồng mô hình mà ứng dụng hỗ trợ:
+Model contract supported by the application:
 
-- Input một tensor float32 NCHW `[1,C,H,W]`, C=1 hoặc 3; C=3 dùng thứ tự RGB.
-- Output một tensor `[1,1,h,w]` cho lớp **tổn thương/nốt nghi ngờ**.
-- Output logits thì ứng dụng dùng sigmoid; output đã sigmoid phải chọn
-  `output_kind="probabilities"`. Không hỗ trợ trực tiếp logits 2 lớp softmax,
-  output tuple/dict, model 3D/2.5D, YOLO hoặc lung-only model.
-- Mạng phải làm việc với **resize stretch** và chuẩn hóa dưới đây. Nếu lúc
-  huấn luyện dùng letterbox, z-score, CLAHE hoặc cửa sổ khác, phải sửa tiền xử lý
-  theo đúng pipeline trước khi dùng kết quả.
+- Input: one float32 NCHW tensor `[1,C,H,W]`, C=1 or 3; C=3 uses RGB order.
+- Output: one tensor `[1,1,h,w]` for the **suspected lesion/nodule** class.
+- If the output is logits, the application applies sigmoid; if the output is
+  already sigmoided, set `output_kind="probabilities"`. Not directly supported:
+  2-class softmax logits, tuple/dict outputs, 3D/2.5D models, YOLO, or
+  lung-only models.
+- The network must work with the **stretch resize** and normalization below. If
+  training used letterboxing, z-score, CLAHE, or a different window, modify the
+  preprocessing to match that pipeline before trusting the results.
 
-## 4. Cấu hình đúng với lúc huấn luyện
+## 4. Configuration matching training
 
-Sao chép `config.example.json` thành `config.json`, sửa:
+Copy `config.example.json` to `config.json` and edit:
 
-| Trường | Ý nghĩa |
+| Field | Meaning |
 |---|---|
-| engine | `torchscript` hoặc `onnx` |
-| source_kind | `photo` cho ảnh 8-bit/camera, `dicom` cho CT gốc |
-| height, width | Kích thước input mạng |
-| channels | 1 grayscale hoặc 3 RGB |
-| mean, std | Một giá trị mỗi kênh: `(pixel_0_1 - mean) / std` |
-| output_kind | `logits` hoặc `probabilities` |
-| threshold | Ngưỡng điểm pixel; 0.5 chỉ là giá trị mẫu, cần chọn trên validation |
-| window_center, window_width | Cửa sổ HU dùng cho DICOM; bỏ qua với ảnh camera |
-| threads | Số luồng CPU của runtime |
+| engine | `torchscript` or `onnx` |
+| source_kind | `photo` for 8-bit/camera images, `dicom` for original CT |
+| height, width | Network input size |
+| channels | 1 grayscale or 3 RGB |
+| mean, std | One value per channel: `(pixel_0_1 - mean) / std` |
+| output_kind | `logits` or `probabilities` |
+| threshold | Pixel score threshold; 0.5 is only a sample value, choose it on validation data |
+| window_center, window_width | HU window for DICOM; ignored for camera images |
+| threads | Number of CPU threads for the runtime |
 
-DICOM: `HU = pixel * RescaleSlope + RescaleIntercept`, sau đó
-`clip((HU - (center - width/2)) / width, 0, 1)`. Mặc định center=-600,
-width=1500 là cấu hình mẫu, không phải chuẩn áp dụng cho mọi mô hình.
-Pixel padding bị loại khỏi mask. DICOM Enhanced/multiframe, localizer được
-đánh dấu, dữ liệu không CT hoặc thiếu rescale sẽ bị từ chối. DICOM nén có thể
-cần decoder pydicom bổ sung theo TransferSyntax; lỗi đọc không được coi là
-“không thấy tổn thương”. Chưa tự lọc axial theo orientation; thư mục đầu vào
-phải được chọn đúng series/plane như lúc huấn luyện.
+DICOM: `HU = pixel * RescaleSlope + RescaleIntercept`, then
+`clip((HU - (center - width/2)) / width, 0, 1)`. The default center=-600,
+width=1500 is a sample configuration, not a standard for every model.
+Pixel padding is excluded from the mask. Enhanced/multiframe DICOM, flagged
+localizers, non-CT data, or data missing rescale values are rejected.
+Compressed DICOM may require an additional pydicom decoder depending on the
+TransferSyntax; a read error is never treated as "no lesion found". Axial
+slices are not yet filtered automatically by orientation; the input folder must
+contain the correct series/plane as used in training.
 
-## 5. Chạy trên thư mục ảnh/lát cắt
+## 5. Running on a folder of images/slices
 
-Ảnh PNG/JPEG 8-bit, cấu hình `source_kind=photo`:
+8-bit PNG/JPEG images, with `source_kind=photo`:
 
 ```bash
 python segment.py --model model_scripted.pt --config config.json \
   --out results batch input_photos
 ```
 
-Chỉ chọn vùng một lát cắt trong ảnh lớn (tọa độ pixel ảnh gốc):
+Select only one slice region in a larger image (pixel coordinates of the
+original image):
 
 ```bash
 python segment.py --model model_scripted.pt --config config.json \
   --out results --roi 100 80 600 600 batch input_photos
 ```
 
-DICOM: đổi `source_kind` thành `dicom`, khớp các tham số tiền xử lý với model:
+DICOM: change `source_kind` to `dicom` and match the preprocessing parameters to
+the model:
 
 ```bash
 python segment.py --model model_scripted.pt --config config.json \
   --out results batch input_dicom
 ```
 
-Có thể thay thư mục bằng đường dẫn một file. Thư mục DICOM được đọc đệ quy,
-bao gồm file không có đuôi; dùng thư mục chỉ chứa series cần xử lý. Thư mục
-kết quả phải nằm ngoài thư mục input. Chương trình chạy độc lập từng lát,
-không sắp xếp theo vị trí giải phẫu, không dựng thể tích 3D, không đếm số u
-duy nhất qua nhiều lát. Một tổn thương có thể xuất hiện ở nhiều lát.
+You can replace the folder with a path to a single file. DICOM folders are read
+recursively, including files without extensions; use a folder containing only
+the series to process. The output folder must be outside the input folder. The
+program processes each slice independently: it does not sort by anatomical
+position, reconstruct a 3D volume, or count unique tumors across slices. One
+lesion may appear in multiple slices.
 
-## 6. Chụp từ OV5642 rồi segmentation
+## 6. Capturing from the OV5642 and segmenting
 
-Trước hết xác nhận driver của board có thể chụp **một ảnh** và lưu JPEG,
-thoát với mã 0 sau khi ghi xong. Tạo `capture_command.json` chứa mảng argv.
-Ví dụ giao diện wrapper bạn cần cung cấp:
+First confirm your board's driver can capture **one image**, save it as JPEG,
+and exit with code 0 once written. Create `capture_command.json` containing an
+argv array. Example of the wrapper interface you need to provide:
 
 ```json
 ["/home/pi/ov5642_driver/capture_one", "--output", "{output}"]
 ```
 
-**Đường dẫn/chương trình và cờ `--output` trên là ví dụ, chưa phải driver được
-kèm trong gói.** Thay toàn bộ bằng lệnh thật của driver/module bạn dùng.
-Nếu driver chỉ streaming, cần wrapper lấy đúng một frame JPEG rồi thoát.
-Ứng dụng truyền đường dẫn file tạm qua `{output}`, gọi không qua shell và chờ
-tối đa 30 giây. Không dùng pipe, `sudo` hoặc lệnh bật GUI trong JSON này.
-Tài khoản chạy chương trình cần có quyền SPI/I2C theo hướng dẫn driver.
+**The path/program and `--output` flag above are examples, not a driver included
+in this package.** Replace them entirely with the real command for your
+driver/module. If the driver only streams, you need a wrapper that grabs exactly
+one JPEG frame and exits.
+The application passes a temporary file path via `{output}`, runs the command
+without a shell, and waits up to 30 seconds. Do not use pipes, `sudo`, or
+GUI-launching commands in this JSON. The account running the program needs
+SPI/I2C permissions as described in the driver's instructions.
 
 ```bash
-# Chụp/xử lý một ảnh:
+# Capture/process one image:
 python segment.py --model model_scripted.pt --config config.json \
   --out results capture --command-json capture_command.json
 
-# Lặp đến khi Ctrl+C; thay lát CT trước mỗi lần chụp:
+# Loop until Ctrl+C; change the CT slice before each capture:
 python segment.py --model model_scripted.pt --config config.json \
   --out results --roi 100 80 600 600 \
   capture --command-json capture_command.json --count 0 --interval 3
 ```
 
-Khoảng nghỉ tính sau khi chụp và suy luận xong, không phải cam kết FPS. Chương
-trình chưa điều khiển cơ cấu di chuyển phim hoặc tự chuyển lát trên màn hình.
+The interval is counted after capture and inference finish; it is not an FPS
+guarantee. The program does not yet control a film-moving mechanism or advance
+slices on a screen automatically.
 
-## 7. Kết quả và giới hạn
+## 7. Outputs and limitations
 
-Mỗi ảnh có thư mục theo SHA256 nội dung đầu vào, chứa:
+Each image gets a folder named by the SHA256 of the input content, containing:
 
-- `overlay.png`: ảnh có vùng đỏ và nhãn nghiên cứu.
-- `mask.png`: cùng kích thước ảnh nguồn; 0 nền, 255 foreground.
-- `score.npy`: điểm float32 sau sigmoid, cùng kích thước ảnh, ngoài ROI = 0.
-- `result.json`: config, fingerprint model/ảnh, ROI, vùng liên thông 2D,
-  bbox và diện tích pixel. Diện tích mm² chỉ có với DICOM có PixelSpacing.
+- `overlay.png`: the image with the red region and a research label.
+- `mask.png`: same size as the source image; 0 background, 255 foreground.
+- `score.npy`: float32 scores after sigmoid, same size as the image, 0 outside the ROI.
+- `result.json`: config, model/image fingerprints, ROI, 2D connected regions,
+  bounding boxes, and pixel areas. Area in mm² is only available for DICOM with
+  PixelSpacing.
 
-`batch_status.json` báo file lỗi và mã thoát khác 0 nếu có lỗi; mask trống sau
-suy luận thành công là một trạng thái khác. Không lọc thành phần nhỏ mặc định
-để tránh tự ý bỏ nốt nhỏ. Số vùng liên thông không phải số ung thư.
-Ảnh giống hệt sẽ ghi cùng thư mục; dùng `--out` mới cho mỗi lần đổi mô hình
-hoặc cấu hình để giữ kết quả trước đó.
+`batch_status.json` reports failed files, and the exit code is non-zero if any
+errors occurred; an empty mask after successful inference is a distinct state.
+Small components are not filtered by default, to avoid silently discarding small
+nodules. The number of connected regions is not the number of cancers.
+Identical images write to the same folder; use a new `--out` for each model or
+configuration change to keep earlier results.
 
-Xử lý cục bộ, không tải ảnh lên mạng. DICOM gốc không bị sửa. Hash tên file
-không phải khử định danh hoàn chỉnh: ảnh camera có thể còn chữ/tên bệnh nhân.
-Ảnh chụp tạm trong chế độ capture được xóa sau xử lý, chỉ lưu các kết quả trên.
+Processing is local; images are not uploaded anywhere. Original DICOM files are
+not modified. Hashing file names is not full de-identification: camera images
+may still contain patient text/names.
+Temporary captures in capture mode are deleted after processing; only the
+outputs above are kept.
 
-Trước khi sử dụng ngoài thử nghiệm, đánh giá trên tập bệnh nhân tách biệt:
-Dice/IoU cho mask, độ nhạy theo tổn thương và false positives/scan. So sánh với
-bác sĩ, kiểm tra miền dữ liệu camera/DICOM và thời gian/RAM trên Pi thật.
-Gói này chưa được xác nhận lâm sàng và không dùng độc lập để quyết định điều trị.
+Before any use beyond experimentation, evaluate on a held-out patient set:
+Dice/IoU for masks, per-lesion sensitivity, and false positives per scan.
+Compare against radiologists, check the camera/DICOM data domain, and measure
+time/RAM on a real Pi.
+This package has not been clinically validated and must not be used on its own
+to make treatment decisions.
 
-## 8. Kiểm tra phần mềm
+## 8. Software tests
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-Test dùng mô hình/dữ liệu tổng hợp để kiểm tra suy luận TorchScript, alignment
-ROI, rescale DICOM, pixel padding và từ chối output không hợp lệ. Mô hình
-tổng hợp chỉ kiểm tra code, không dùng để phát hiện bệnh.
+Tests use synthetic models/data to check TorchScript inference, ROI alignment,
+DICOM rescaling, pixel padding, and rejection of invalid outputs. The synthetic
+model only tests the code and must not be used to detect disease.
 
-## Tài liệu tham khảo
+## References
 
 - ArduCAM SPI reference: https://github.com/ArduCAM/RaspberryPi/tree/master/SPI_Camera
 - pydicom pixel data: https://pydicom.github.io/pydicom/stable/guides/user/working_with_pixel_data.html
 - ONNX Runtime ARM64/Python: https://onnxruntime.ai/docs/get-started/with-python
 - PyTorch TorchScript: https://docs.pytorch.org/docs/stable/jit.html
-- Ý nghĩa nốt phổi: https://www.cancer.org/cancer/types/lung-cancer/detection-diagnosis-staging/lung-nodules.html
+- Lung nodule information: https://www.cancer.org/cancer/types/lung-cancer/detection-diagnosis-staging/lung-nodules.html

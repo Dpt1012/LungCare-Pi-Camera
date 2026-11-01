@@ -1,0 +1,15 @@
+{
+  "engine": "torchscript",
+  "source_kind": "photo",
+  "height": 256,
+  "width": 256,
+  "channels": 1,
+  "resize": "stretch",
+  "mean": [0.0],
+  "std": [1.0],
+  "output_kind": "logits",
+  "threshold": 0.5,
+  "window_center": -600.0,
+  "window_width": 1500.0,
+  "threads": 2
+}
